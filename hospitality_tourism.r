@@ -10,11 +10,13 @@
 library(tidyverse)
 library(khroma)
 library(sf)
+library(leaflet)
+library(viridis)
 # 
 # ---- read.data ----
 walk_wheelchair <- 
   readxl::read_excel(
-    "hospitality_tourism.xlsx",
+    "walk_wheelchair_velocity.xlsx",
     sheet = "Nagasaki"
   ) %>% 
   dplyr::mutate(
@@ -63,7 +65,7 @@ walk_wheelchair_standard_time <-
     mode,
     course,
     round
-    ) %>% 
+  ) %>% 
   # convert the standard time in dttm format into one in hms format.
   dplyr::mutate(standard_time = hms::as_hms(standard_time))
 # save the results in rds format
@@ -76,7 +78,7 @@ readr::write_rds(
 readr::write_excel_csv(
   walk_wheelchair_standard_time, 
   "walk_wheelchair_standard_time.csv"
-  )
+)
 
 # ----- line.plot -----
 line_trial_walk_wheelchair <- 
@@ -84,7 +86,8 @@ line_trial_walk_wheelchair <-
   ggplot2::ggplot(
     aes(
       x = standard_time,
-      y = log(velocity+0.5)
+      # y = log(velocity+0.5)
+      y = velocity
     )
   ) +
   # add lines
@@ -106,7 +109,7 @@ line_trial_walk_wheelchair <-
     legend.position = "bottom",
     strip.background = element_blank()
   ) +
-  facet_wrap(~ mode + course, scales = "free_x")
+  facet_wrap(~ course + mode, scales = "free_x")
 line_trial_walk_wheelchair
 # 
 # save
@@ -120,5 +123,38 @@ ggsave(
   units = "mm"
 )
 # END
+# 
+# ----- leaflet.map -----
+# draw leaflet maps
+# https://stackoverflow.com/questions/52108978/cant-set-color-parameter-in-addcirclemarkers
+# 
+# make color palette
+domain <- range(walk_wheelchair_standard_time$velocity, na.rm = TRUE)
+pal <- colorNumeric(palette = viridis(10), domain = domain)
+# draw
+# walk
+leaflet_map_walk <- 
+  walk_wheelchair_standard_time %>% 
+  drop_na(velocity) %>% 
+  dplyr::filter(mode == "walk") %>%
+  leaflet::leaflet() %>% 
+  addTiles() %>% 
+  addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity)) %>% 
+  addLegend(position = "bottomright", pal = pal, values = ~log(velocity+0.5), title = "Posiion and velocity </br> (walk, Unit: km/h, log Trans.)")
+leaflet_map_walk
+# wheelchair
+leaflet_map_wheelchair <- 
+  walk_wheelchair_standard_time %>% 
+  drop_na(velocity) %>% 
+  dplyr::filter(mode == "wheelchair") %>%
+  leaflet::leaflet() %>% 
+  addTiles() %>% 
+  addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity)) %>% 
+  addLegend(position = "bottomright", pal = pal, values = ~log(velocity+0.5), title = "Posiion and velocity </br> (wheelchair, Unit: km/h, log Trans.)")
+leaflet_map_wheelchair
+
+
+# leaflet
+
 
 
