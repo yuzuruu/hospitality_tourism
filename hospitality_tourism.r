@@ -12,12 +12,13 @@ library(khroma)
 library(sf)
 library(leaflet)
 library(viridis)
+library(gtsummary)
 # 
 # ---- read.data ----
 walk_wheelchair <- 
   readxl::read_excel(
     "walk_wheelchair_velocity.xlsx",
-    sheet = "Nagasaki"
+    sheet = "combined"
   ) %>% 
   dplyr::mutate(
     round = dplyr::case_when(
@@ -81,8 +82,9 @@ readr::write_excel_csv(
 )
 
 # ----- line.plot -----
-line_trial_walk_wheelchair <- 
+line_velocity_walk_wheelchair <- 
   walk_wheelchair_standard_time %>% 
+  dplyr::filter(velocity < 10) %>%
   ggplot2::ggplot(
     aes(
       x = standard_time,
@@ -109,15 +111,15 @@ line_trial_walk_wheelchair <-
     legend.position = "bottom",
     strip.background = element_blank()
   ) +
-  facet_wrap(~ course + mode, scales = "free_x")
+  facet_wrap(~ course + mode, ncol = 2, scales = "free_x")
 line_trial_walk_wheelchair
 # 
 # save
 ggsave(
   # file name
-  "line_trial_walk_wheelchair.pdf",
+  "line_velocity_walk_wheelchair_combined.pdf",
   # target object
-  plot = line_trial_walk_wheelchair,
+  plot = line_velocity_walk_wheelchair,
   height = 500,
   width = 500,
   units = "mm"
@@ -130,31 +132,53 @@ ggsave(
 # 
 # make color palette
 domain <- range(walk_wheelchair_standard_time$velocity, na.rm = TRUE)
-pal <- colorNumeric(palette = viridis(10), domain = domain)
+pal <- colorNumeric(palette = viridis(100), domain = 1:5)
 # draw
 # walk
 leaflet_map_walk <- 
   walk_wheelchair_standard_time %>% 
   drop_na(velocity) %>% 
-  dplyr::filter(mode == "walk") %>%
+  dplyr::filter(mode == "walk" & round == "first") %>%
   leaflet::leaflet() %>% 
   addTiles() %>% 
   addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity)) %>% 
-  addLegend(position = "bottomright", pal = pal, values = ~log(velocity+0.5), title = "Posiion and velocity </br> (walk, Unit: km/h, log Trans.)")
+  addLegend(position = "bottomright", pal = pal, values =~ velocity, title = "Posiion and velocity </br> (walk, Unit: km/h)")
 leaflet_map_walk
 # wheelchair
 leaflet_map_wheelchair <- 
   walk_wheelchair_standard_time %>% 
   drop_na(velocity) %>% 
-  dplyr::filter(mode == "wheelchair") %>%
+  dplyr::filter(mode == "wheelchair" & round == "first") %>%
   leaflet::leaflet() %>% 
   addTiles() %>% 
-  addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity)) %>% 
-  addLegend(position = "bottomright", pal = pal, values = ~log(velocity+0.5), title = "Posiion and velocity </br> (wheelchair, Unit: km/h, log Trans.)")
+  addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity), radius = 1) %>% 
+  addLegend(position = "bottomright", pal = pal, values =~ velocity, title = "Posiion and velocity </br> (wheelchair, Unit: km/h)")
 leaflet_map_wheelchair
-
-
-# leaflet
-
-
-
+# 
+# ----- table.one -----
+# make a table one
+gtsummary::theme_gtsummary_mean_sd()
+walk_wheelchair_tableone <- 
+  walk_wheelchair_standard_time %>% 
+  tidyr::drop_na(velocity) %>% 
+  dplyr::select(mode, course, round, city, velocity) %>% 
+  gtsummary::tbl_strata(
+    strata = city, 
+    .tbl_fun =
+      ~ .x %>% 
+      gtsummary::tbl_summary(
+        by = mode,
+        type = list(
+          course ~ "categorical", 
+          round ~ "categorical", 
+          mode ~ "categorical"
+          ),
+        include = c(course, round, velocity)
+        # label = list(
+        #   HICOV = "Any health insurance",
+        #   ESRG = "Employment",
+        #   EXPANSION = "Expansion"
+      )
+  )
+# save the table
+walk_wheelchair_tableone %>% gtsummary::as_tibble() %>% writexl::write_xlsx(., "walk_wheelchair_tableone.xlsx")
