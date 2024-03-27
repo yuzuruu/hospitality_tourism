@@ -13,12 +13,16 @@ library(sf)
 library(leaflet)
 library(viridis)
 library(gtsummary)
+library(cmdstanr)
+library(furrr)
+future::plan(multisession, workers = 16)
+
 # 
 # ---- read.data ----
 walk_wheelchair <- 
   readxl::read_excel(
     "walk_wheelchair_velocity.xlsx",
-    sheet = "combined"
+    sheet = "Combined"
   ) %>% 
   dplyr::mutate(
     round = dplyr::case_when(
@@ -112,7 +116,7 @@ line_velocity_walk_wheelchair <-
     strip.background = element_blank()
   ) +
   facet_wrap(~ course + mode, ncol = 2, scales = "free_x")
-line_trial_walk_wheelchair
+line_velocity_walk_wheelchair
 # 
 # save
 ggsave(
@@ -140,9 +144,10 @@ leaflet_map_walk <-
   drop_na(velocity) %>% 
   dplyr::filter(mode == "walk" & round == "first") %>%
   leaflet::leaflet() %>% 
-  addTiles() %>% 
-  addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity)) %>% 
-  addLegend(position = "bottomright", pal = pal, values =~ velocity, title = "Posiion and velocity </br> (walk, Unit: km/h)")
+  # addTiles() %>% 
+  addProviderTiles('Esri.WorldImagery') %>% 
+  addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity), radius = 1) %>% 
+  addLegend(position = "bottomright", pal = pal, values =~ velocity, title = "Posiion and speed </br> (walk, Unit: km/h)")
 leaflet_map_walk
 # wheelchair
 leaflet_map_wheelchair <- 
@@ -150,9 +155,10 @@ leaflet_map_wheelchair <-
   drop_na(velocity) %>% 
   dplyr::filter(mode == "wheelchair" & round == "first") %>%
   leaflet::leaflet() %>% 
-  addTiles() %>% 
+  # addTiles() %>% 
+  addProviderTiles('Esri.WorldImagery') %>% 
   addCircleMarkers(lng =~ longitude, lat =~ latitude, color =~ pal(velocity), radius = 1) %>% 
-  addLegend(position = "bottomright", pal = pal, values =~ velocity, title = "Posiion and velocity </br> (wheelchair, Unit: km/h)")
+  addLegend(position = "bottomright", pal = pal, values =~ velocity, title = "Posiion and speed </br> (wheelchair, Unit: km/h)")
 leaflet_map_wheelchair
 # 
 # ----- table.one -----
@@ -172,7 +178,7 @@ walk_wheelchair_tableone <-
           course ~ "categorical", 
           round ~ "categorical", 
           mode ~ "categorical"
-          ),
+        ),
         include = c(course, round, velocity)
         # label = list(
         #   HICOV = "Any health insurance",
@@ -182,3 +188,209 @@ walk_wheelchair_tableone <-
   )
 # save the table
 walk_wheelchair_tableone %>% gtsummary::as_tibble() %>% writexl::write_xlsx(., "walk_wheelchair_tableone.xlsx")
+
+
+
+
+# ------ change.point.detection -----
+# make a dataset
+# notice
+# split by mode and course
+# This detection seeks some change points of velocity to detect obstacles.
+
+
+
+standard_time_filter <- 
+  walk_wheelchair_standard_time %>% 
+  group_by(mode, course, round) %>% 
+  nest() %>% 
+  dplyr::left_join(
+    walk_wheelchair %>% group_by(mode, course, round) %>% nest() %>% dplyr::mutate(last_time_utc = purrr::map_dbl(data, ~ dplyr::last(.$utc)) %>% lubridate::as_datetime()) %>% dplyr::select(mode, course, round, last_time_utc) %>% unnest() %>% ungroup(), 
+    join_by(mode==mode, course==course, round==round)
+  ) %>% 
+  dplyr::mutate(
+    last_time_standard_time = purrr::map(
+      data, 
+      ~ 
+        dplyr::filter(., utc == last_time_utc)
+    ),
+    last_time_standard_time_filter = purrr::map_df(
+      last_time_standard_time,
+      ~ 
+        dplyr::select(., standard_time)
+    )
+  ) %>% 
+  dplyr::select(-data, -last_time_standard_time) %>% 
+  unnest() %>% 
+  ungroup() %>% 
+  data.table::setnames(c("mode","course","round","last_time_utc","last_time_standard"))
+
+
+
+
+
+
+
+
+
+
+walk_wheelchair_analysis <- 
+  walk_wheelchair_standard_time %>% 
+  group_by(mode, course, round) %>% 
+  nest() %>% 
+  dplyr::left_join(
+    standard_time_filter,
+    join_by(mode==mode, course==course, round==round)
+  ) %>% 
+  dplyr::mutate(
+    data = purrr::map(data, ~ dplyr::filter(., standard_time < last_time_standard))
+  ) %>% 
+  unnest() %>% 
+  ungroup() 
+
+# dplyr::filter(
+#   mode == "wheelchair" & course == "Peace_park" & round == "first"
+# ) 
+
+
+# map for continuous processing
+
+
+# # complie the stan code
+# model <- cmdstanr::cmdstan_model("hospitality_tourism.stan", compile = FALSE)
+# # model$format(canonicalize = list("deprecations"), overwrite_file = TRUE)
+# model$compile()
+# 
+# walk_wheelchair_analysis_model_01 <- 
+#   walk_wheelchair_analysis %>%
+#   # dplyr::filter(course == "Ang_kaew") %>% 
+#   group_by(mode, course, round) %>% 
+#   nest() %>% 
+#   dplyr::mutate(
+#     fit = furrr::future_map(
+#       data,
+#       function(data){
+#         fit_01 <- model$sample(
+#           data = list(
+#             y = na.omit(data$velocity),
+#             TT = length(data$velocity), 
+#             N = 1, 
+#             n_obs = data$velocity %>% na.omit(.) %>% length(.), 
+#             col_index_obs = which(!is.na(data$velocity), arr.ind = TRUE)
+#           ), 
+#           seed = 123,
+#           chains = 4,
+#           iter_warmup = 4000,
+#           iter_sampling = 4000,
+#           threads_per_chain = 4,
+#           parallel_chains = 4,
+#           step_size = 10,
+#           refresh = 100
+#         )
+#         fit_01$summary(
+#           variables = NULL,
+#           posterior::default_summary_measures()[1:4],
+#           quantiles = ~ posterior::quantile2(., probs = c(0.025, 0.975)),
+#           posterior::default_convergence_measures()
+#           )
+#         }
+#       )
+#     )
+# # save
+# readr::write_rds(
+#   walk_wheelchair_analysis_model_01,
+#   "walk_wheelchair_analysis_model_01.rds"
+# )
+
+walk_wheelchair_analysis_model_01 <- 
+  readr::read_rds(
+    "walk_wheelchair_analysis_model_01.rds"
+  )
+
+walk_wheelchair_analysis_model_01_line <- 
+  walk_wheelchair_analysis_model_01 %>% 
+  dplyr::mutate(
+    line_plot = furrr::future_map(
+      fit,
+      ~
+        dplyr::filter(., stringr::str_detect(.$variable, "yhat"))%>%
+        bind_cols(data) %>% 
+        ggplot2::ggplot() +
+        geom_point(aes(x = standard_time, y = velocity), color = "skyblue") +
+        geom_line(aes(x = standard_time, y = mean)) +
+        geom_ribbon(aes(x = standard_time, ymin = q2.5, ymax = q97.5), alpha = 0.2) +
+        labs(
+          x = "Time (Unit: second)",
+          y = "Velocity (Unit: km/h)",
+          title = paste(course, mode, sep = " "),
+          subtitle = round
+        ) +
+        theme_classic() + 
+        theme(
+          legend.position = "none"
+        )
+    )
+  )
+# save the results
+pdf("walk_wheelchair_analysis_model_01_line.pdf")
+walk_wheelchair_analysis_model_01_line$line_plot
+dev.off()
+# 
+# plot transition of SD over time
+walk_wheelchair_analysis_model_01_sd_line <- 
+  walk_wheelchair_analysis_model_01 %>% 
+  dplyr::mutate(
+    line_plot = furrr::future_map(
+      fit,
+      ~
+        dplyr::filter(., stringr::str_detect(.$variable, "yhat"))%>%
+        bind_cols(data) %>% 
+        ggplot2::ggplot() +
+        geom_line(aes(x = standard_time, y = sd)) +
+        labs(
+          x = "Time (Unit: second)",
+          y = "SD of estimated speed",
+          title = paste(course, mode, sep = " "),
+          subtitle = round
+        ) +
+        ylim(0, 1) +
+        theme_classic() + 
+        theme(
+          legend.position = "none"
+        )
+    )
+  )
+# plot
+pdf("walk_wheelchair_analysis_model_01_line_sd.pdf")
+walk_wheelchair_analysis_model_01_sd_line$line_plot
+dev.off()
+
+
+
+# for model 02
+
+walk_wheelchair_analysis_02 <- 
+  walk_wheelchair_standard_time %>% 
+  group_by(mode, course, round) %>% 
+  nest() %>% 
+  dplyr::left_join(
+    standard_time_filter,
+    join_by(mode==mode, course==course, round==round)
+  ) %>% 
+  dplyr::mutate(
+    data = purrr::map(data, ~ dplyr::filter(., standard_time < last_time_standard))
+  ) %>% 
+  unnest() %>% 
+  ungroup() 
+
+# dplyr::filter(
+#   mode == "wheelchair" & course == "Peace_park" & round == "first"
+# ) 
+
+
+
+
+
+
+
+
