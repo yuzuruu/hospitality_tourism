@@ -2,7 +2,7 @@
 # Diurnal variation of moving speed by wheelchair tourist
 # by Yuzuru Utsunomiya
 # First: 20th. February 2025
-# Revised:
+# Revised: 4th. March 2025
 #
 #
 #
@@ -31,6 +31,8 @@ temples_feb_2025_speed <-
     id_all = factor(id_all),
     id_track = factor(id_track),
     track = factor(track),
+    # convert character to ymd_hms. 
+    # Somehow the datetime data is read as character...
     time = lubridate::ymd_hms(time)
   ) |> 
   group_by(track)  |> 
@@ -49,7 +51,14 @@ temples_feb_2025_speed <-
       TRUE ~ "hoge"
       )
     ) |> 
-  tidyr::complete(time = tidyr::full_seq(time, 1), mode, occasion, fill = list(lat = NA, lon = NA, speed = NA)) |> 
+  # complete missing observation
+  # DO NOT BE CARELESS!! Even thought the data is collected by the GPS, 
+  # the logging data includes missing values, which inhibit analyses normally.
+  tidyr::complete(
+    time = tidyr::full_seq(time, 1), mode, occasion, 
+    # for the missing values, place NA
+    fill = list(lat = NA, lon = NA, speed = NA)
+    ) |> 
   dplyr::mutate(
     # Compute differences between start time and a reference time
     difference = lubridate::time_length(
@@ -65,7 +74,11 @@ temples_feb_2025_speed <-
     # We use the standard time to compare speed with variety of backgrounds with each other. 
     standard_time = (time - seconds(difference))
   ) |>
-  dplyr::mutate(across(where(is.character), factor)) |> 
+  # Transform those which are character.
+  dplyr::mutate(
+    across(where(is.character), 
+           factor)
+    ) |> 
   dplyr::select(-difference) %>% 
   ungroup() |>  
   # group_by(track) |> 
@@ -80,14 +93,19 @@ temples_feb_2025_speed <-
     standard_time = hms::as_hms(standard_time)
     )
 # detected objects from six movies
+# make a file list to read the target files
 file_list <- fs::dir_ls("temples_log", glob = "*.csv")
+# read the files
 detected_objects <- 
   vroom::vroom(
-    file_list, 
+    file_list,
+    # add file names into saved csv files for convenience
     id = 'filename',
+    # select necessary variables
     col_select = c(timestamp_ms, class_name, confidence, frame_number)
     ) |> 
   dplyr::mutate(
+    # pick up mode names (walk / wheelchair) from target files' name
     # Explanation:
     # ^[^_]+_ → Matches everything up to and including the first underscore.
     # [^_]+_ → Matches everything up to and including the second underscore.
@@ -95,6 +113,8 @@ detected_objects <-
     # _ → Ensures the match stops at the third underscore.
     # str_match() returns a matrix, and [,2] extracts only the captured group.
     mode = stringr::str_match(filename, "^[^_]+_[^_]+_([^_]+)_")[,2],
+    # 
+    # pick up mode names (walk / wheelchair) from target files' name
     # Explanation:
     #   (?:[^_]*_){4} → Matches and skips the first four underscores.
     # ([^_]*) → Captures everything up to the next underscore (the 5th underscore).
@@ -103,41 +123,44 @@ detected_objects <-
   ) |> 
   dplyr::select(-filename) |> 
   dplyr::mutate(
-    frame_number = factor(frame_number) #,
-    # # NOTE
-    # # adjust track number in accordance with target mode and occasion 
-    # time_milliseconds = format(
-    #   lubridate::milliseconds(timestamp_ms) + lubridate::ymd_hms(temples_feb_2025_speed |> _$time[1]), 
-    #   format = "%Y-%m-%d %H:%M:%OS"
-    #   )
+    frame_number = factor(frame_number) 
   ) |> 
-  # 
-  # dplyr::mutate(
-  #   # transform the milliseconds data into dttm-formatted data
-  #   # Somehow the previous treatment convert milliseconds variable as character
-  #   # and we need to transform that.
-  #   time_milliseconds = lubridate::ymd_hms(time_milliseconds),
-  #   # round the milliseconds variable by second
-  #   # This is a key for joining this dataset into the GPS log data 
-  #   time_ymd_hms = lubridate::round_date(time_milliseconds, unit = "second")
-  # ) |> 
-  # # transform character-formatted variables into factor
   dplyr::mutate(across(where(is.character), factor)) |> 
   # tibble!
   dplyr::tibble()
+# combine GPS logging data and detected objects lists
+# Procedure
+# 1. Make a table of started time (temples_feb_2025_speed_key). 
+# As a key, we use timestamps of the files. The detected objects files,
+# however, include merely timestamps in millisecond from time started recording.
+# To combine the file, using the timestamps and starting time, we need to make
+# a variable indicating recording moment. 
+# 2. Aggregate the N. of detected objects by object
+# The timestamps in millisecond do not meet existing GPS loggind data in second.
+# By aggregating the millisecond variable by second, we can merge the two data
+# 3. Complete missing values
+# 4. 
+# 5. 
 # 
+# 1. make a key table
 temples_feb_2025_speed_key <- 
   temples_feb_2025_speed |> 
-  group_by(mode, occasion) |> 
-  slice_head(n=1) |> 
+  dplyr::group_by(mode, occasion) |> 
+  # obtain the first observation
+  slice_head(n = 1) |> 
   ungroup() |> 
-  select(mode, occasion, time) |> 
+  dplyr::select(mode, occasion, time) |> 
   data.table::setnames(c("mode","occasion","time_start"))
-# 
+# merge the two dataset
 object_time_millisec <- 
-  detected_objects |> 
-  left_join(temples_feb_2025_speed_key, by = join_by(mode, occasion)) |> 
-  mutate(
+  detected_objects |>
+  # merge!!
+  dplyr::left_join(
+    temples_feb_2025_speed_key, 
+    by = join_by(mode, occasion
+                 )
+    ) |> 
+  dplyr::mutate(
     time_millisec = format(
       lubridate::milliseconds(timestamp_ms) + time_start, 
       format = "%Y-%m-%d %H:%M:%OS"
@@ -148,16 +171,15 @@ object_time_millisec <-
     ) |> lubridate::ymd_hms() |> lubridate::round_date("second")
   ) |> 
   dplyr::select(class_name, mode, occasion, time, time_millisec, frame_number)
-# 
+# 2. aggregate
 object_time <- 
-  # object_time_millisec |> 
-  # select(time, class_name, time_millisec) |> 
-  # # dplyr::left_join(temples_feb_2025_speed, by = join_by(time, mode, occasion)) |> 
-  # dplyr::left_join(temples_feb_2025_speed, by = join_by(time)) |> 
   temples_feb_2025_speed |> 
-  # dplyr::left_join(temples_feb_2025_speed, by = join_by(time, mode, occasion)) |>
-  dplyr::left_join(object_time_millisec |>　select(time, class_name, time_millisec), by = join_by(time)) |>
+  dplyr::left_join(
+    object_time_millisec |>　select(time, class_name, time_millisec), 
+    by = join_by(time)
+    ) |>
   dplyr::select(id_all, mode, occasion, class_name, time, time_millisec, standard_time, lat, lon, speed) |> 
+  # to confirm progress of here
   dplyr::arrange(id_all) |> 
   dplyr::mutate(
     time_millisec = lubridate::ymd_hms(time_millisec)
@@ -165,27 +187,32 @@ object_time <-
   dplyr::mutate(
     across(where(is.character), factor)
   )
-# 
-
-# # for inspection
-# object_time_second |> filter(mode == "walk" & occasion  == "morning" & class_name == "car")
-# object_time_second |> filter(mode == "walk" & occasion  == "morning" & class_name == "motorcycle")
-# object_time_second |> filter(mode == "walk" & occasion  == "morning" & class_name == "person")
-
+# 3. complete missing values
 object_time_second <- 
   object_time |> 
-  filter(class_name %in% c("car", "motorcycle", "person")) |>
+  dplyr::filter(class_name %in% c("car", "motorcycle", "person")) |>
+  # omit levels filtered
+  # Otherwise, the removed levels remain.
   droplevels() |> 
-  group_by(mode, occasion, class_name, time = lubridate::floor_date(time, unit = "1 second")) |>
-  summarise(
+  dplyr::group_by(
+    mode, occasion, class_name, 
+    # to group by second
+    time = lubridate::floor_date(time, unit = "1 second")
+    ) |>
+  dplyr::summarise(
     N = n(),
     Mean_speed = mean(speed)
   ) |>
   ungroup() |> 
   group_by(mode, occasion) |>
+  # COMPLETE!!
   # HERE!!
-  tidyr::complete(time = tidyr::full_seq(time, 1), class_name, fill = list(N = NA, Mean_speed = NA))|>
-  mutate(
+  tidyr::complete(
+    time = tidyr::full_seq(time, 1), 
+    class_name, 
+    fill = list(N = NA, Mean_speed = NA)
+    ) |>
+  dplyr::mutate(
     difference = lubridate::time_length(
       lubridate::interval(
         # set a reference time deep in the past
@@ -196,7 +223,7 @@ object_time_second <-
         )
       )
     ) |> 
-  mutate(
+  dplyr::mutate(
     # Compute the gap between utc and difference.
     # We use the standard time to compare speed with variety of backgrounds with each other.
     standard_time = (time - seconds(difference)) |> hms::as_hms(),
@@ -204,6 +231,7 @@ object_time_second <-
     ) |> 
   ungroup()
 # save the results
+# well done
 readr::write_rds(object_time_second, "object_time_second.rds")
 
 # ------ figure.and.table -----
@@ -248,11 +276,7 @@ line_speed <-
     legend.position = "bottom",
     strip.background = element_blank()
   )
-
-
+# save
 ggsave("line_n_object_by_occasion_classname.pdf", plot = line_n_object_by_occasion_classname, width = 240, height = 160, units = "mm")
 ggsave("line_speed.pdf", plot = line_speed, width = 240, height = 160, units = "mm")
-
-
-
 
