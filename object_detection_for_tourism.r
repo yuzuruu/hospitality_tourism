@@ -17,6 +17,9 @@
 # ----- read.library -----
 library(tidyverse)
 library(khroma)
+library(gtsummary)
+library(cmdstanr)
+library(future)
 # magic word
 options(digits.secs = 5)
 # 
@@ -193,24 +196,29 @@ object_time_second <-
   dplyr::filter(class_name %in% c("car", "motorcycle", "person")) |>
   # omit levels filtered
   # Otherwise, the removed levels remain.
-  droplevels() |> 
+  droplevels() |>
+  dplyr::mutate(counter = as.numeric(1)) |> 
   dplyr::group_by(
     mode, occasion, class_name, 
     # to group by second
     time = lubridate::floor_date(time, unit = "1 second")
     ) |>
   dplyr::summarise(
-    N = n(),
+    N = sum(counter),
     Mean_speed = mean(speed)
   ) |>
   ungroup() |> 
+  dplyr::left_join(
+    temples_feb_2025_speed |> dplyr::select(time, lat, lon),
+    by = join_by("time")
+  ) |> 
   group_by(mode, occasion) |>
   # COMPLETE!!
   # HERE!!
   tidyr::complete(
     time = tidyr::full_seq(time, 1), 
     class_name, 
-    fill = list(N = NA, Mean_speed = NA)
+    fill = list(N = NA, Mean_speed = NA, lat = NA, lon = NA)
     ) |>
   dplyr::mutate(
     difference = lubridate::time_length(
@@ -235,10 +243,21 @@ object_time_second <-
 readr::write_rds(object_time_second, "object_time_second.rds")
 
 # ------ figure.and.table -----
-# table 1
-# line plot of speed over time
 # read data
 object_time_second <- readr::read_rds("object_time_second.rds")
+# table 1
+object_time_tableone <- 
+  object_time_second |> 
+  dplyr::select(mode, occasion, class_name, N, Mean_speed) |> 
+  gtsummary::tbl_strata(
+    strata = mode,
+    ~.x |> 
+      gtsummary::tbl_summary(
+        by = occasion,
+        statistic = list(all_continuous() ~ "{mean} ({sd})")
+      )
+  ) 
+# line plot of speed over time
 # N. of detected items over time
 line_n_object_by_occasion_classname <- 
   object_time_second |> 
@@ -279,4 +298,69 @@ line_speed <-
 # save
 ggsave("line_n_object_by_occasion_classname.pdf", plot = line_n_object_by_occasion_classname, width = 240, height = 160, units = "mm")
 ggsave("line_speed.pdf", plot = line_speed, width = 240, height = 160, units = "mm")
+
+
+# ----- state.space.method -----
+# read data
+object_time_second <- readr::read_rds("object_time_second.rds")
+
+object_time_second_selected <- 
+  object_time_second |> 
+  dplyr::filter(mode == "wheelchair" & occasion == "evening" & class_name == "person")
+# 
+# Make data for stan
+# speed(= 4,244)
+Y <- dplyr::if_else(is.na(object_time_second_selected$Mean_speed),99999,object_time_second_selected$Mean_speed)
+# N. of obstacles (= 4,244)
+# The "B" indicates "B"arrier.
+B <- dplyr::if_else(is.na(object_time_second_selected$N), 99999, object_time_second_selected$N)
+# # latitude
+# LAT <- dplyr::if_else(is.na(object_time_second_selected$lat), 99999, object_time_second_selected$lat)
+# # longitude
+# LON <- dplyr::if_else(is.na(object_time_second_selected$lon), 99999, object_time_second_selected$lon)
+# observation index
+observed_idx <- which(Y != 99999)  # Indices of observed values
+missing_idx <- which(Y == 99999)   # Indices of missing values
+observed_idx_b <- which(B != 99999)  # Indices of observed values
+missing_idx_b <- which(B == 99999)   # Indices of missing values
+# Get counts
+T <- length(Y)
+N_observed <- length(observed_idx)
+N_observed_b <- length(observed_idx_b)
+N_missing_speed <- length(missing_idx)
+N_missing_barrier  <- length(missing_idx_b)
+# make a list
+data <- list(
+  T = T,
+  Y = Y,
+  B = B,
+  observed_idx = observed_idx,
+  missing_idx = missing_idx,
+  observed_idx_b = observed_idx_b,
+  missing_idx_b = missing_idx_b,
+  N_observed = N_observed,
+  N_observed_b = N_observed_b,
+  N_missing_speed = N_missing_speed,
+  N_missing_barrier = N_missing_barrier
+)
+# Use CPU as many CPU cores as possible
+options(mc.cores = parallel::detectCores())
+# compile the model
+stanmodel <- cmdstanr::cmdstan_model("object_detection_for_tourism_03.stan")
+# Model executable is up to date!
+fit <- 
+  stanmodel$sample(
+    data = data,     # 分析に用いるデータのリスト
+    seed = 123,          # 乱数の種
+    chains = 4,          # チェイン数(規定値は4)
+    refresh = 100,      # コンソールに表示される結果の間隔
+    iter_warmup = 500,  # バーンイン期間
+    iter_sampling = 500 # サンプリング
+    )
+# save
+fit$save_object(file = "fit.rds")
+# summary
+fit$summary()
+# save the results by .csv
+readr::write_excel_csv(fit$summary(), "fit.csv")
 
