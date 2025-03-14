@@ -304,51 +304,63 @@ ggsave("line_speed.pdf", plot = line_speed, width = 240, height = 160, units = "
 # read data
 object_time_second <- readr::read_rds("object_time_second.rds")
 
-object_time_second_selected <- 
+
+object_time_second_stan <- 
   object_time_second |> 
-  dplyr::filter(mode == "wheelchair" & occasion == "evening" & class_name == "person")
-# 
-# Make data for stan
-# speed(= 4,244)
-Y <- dplyr::if_else(is.na(object_time_second_selected$Mean_speed),99999,object_time_second_selected$Mean_speed)
-# N. of obstacles (= 4,244)
-# The "B" indicates "B"arrier.
-B <- dplyr::if_else(is.na(object_time_second_selected$N), 99999, object_time_second_selected$N)
-# # latitude
-# LAT <- dplyr::if_else(is.na(object_time_second_selected$lat), 99999, object_time_second_selected$lat)
-# # longitude
-# LON <- dplyr::if_else(is.na(object_time_second_selected$lon), 99999, object_time_second_selected$lon)
-# observation index
-observed_idx <- which(Y != 99999)  # Indices of observed values
-missing_idx <- which(Y == 99999)   # Indices of missing values
-observed_idx_b <- which(B != 99999)  # Indices of observed values
-missing_idx_b <- which(B == 99999)   # Indices of missing values
-# Get counts
-T <- length(Y)
-N_observed <- length(observed_idx)
-N_observed_b <- length(observed_idx_b)
-N_missing_speed <- length(missing_idx)
-N_missing_barrier  <- length(missing_idx_b)
-# make a list
+  dplyr::filter(class_name == "person") |> 
+  group_by(mode, occasion) |> 
+  dplyr::mutate(
+    standard_time_order = order(standard_time)
+  ) |> 
+  ungroup() |> 
+  dplyr::select(-time, -standard_time, -difference) |> 
+  tidyr::complete(
+    mode, occasion,
+    standard_time_order,
+    fill = list(lat = NA, lon = NA, Mean_speed = NA, N = NA)
+    ) |> 
+  {\(.) dplyr::mutate(., id=1:nrow(x=.))}() |> 
+  dplyr::mutate(
+    mode_id = dplyr::case_when(
+      mode == "walk" ~ "1",
+      mode == "wheelchair" ~ "2",
+      TRUE ~ "hoge"
+    ),
+    occasion_id = dplyr::case_when(
+      occasion == "morning" ~ "1",
+      occasion == "afternoon" ~ "2",
+      occasion == "evening" ~ "3",
+      TRUE ~ "hoge"
+      )
+    )
+
+# readr::write_excel_csv(object_time_second_stan, "data.csv")
+
+T <- length(levels(factor(object_time_second_stan$standard_time_order)))
+number_mode <- length(levels(factor(object_time_second_stan$mode))) 
+number_occasion <- length(levels(factor(object_time_second_stan$occasion))) 
+N_obs <- length(which(!is.na(object_time_second_stan$Mean_speed)))
+obs_time <- object_time_second_stan |> drop_na(Mean_speed) |> select(standard_time_order) |> _$standard_time_order |> as.numeric(as.character())
+obs_mode <- object_time_second_stan |> drop_na(Mean_speed) |> select(mode_id) |> _$mode_id |> as.numeric(as.character())
+obs_occasion <- object_time_second_stan |> drop_na(Mean_speed) |> select(occasion_id) |> _$occasion_id |> as.numeric(as.character())
+speed_obs <- purrr::discard(object_time_second_stan$Mean_speed, is.na)
+
 data <- list(
   T = T,
-  Y = Y,
-  B = B,
-  observed_idx = observed_idx,
-  missing_idx = missing_idx,
-  observed_idx_b = observed_idx_b,
-  missing_idx_b = missing_idx_b,
-  N_observed = N_observed,
-  N_observed_b = N_observed_b,
-  N_missing_speed = N_missing_speed,
-  N_missing_barrier = N_missing_barrier
+  number_mode = number_mode,
+  number_occasion = number_occasion,
+  N_obs = N_obs,
+  obs_time = obs_time,
+  obs_mode = obs_mode,
+  obs_occasion = obs_occasion,
+  speed_obs = speed_obs
 )
 # Use CPU as many CPU cores as possible
 options(mc.cores = parallel::detectCores())
 # compile the model
-stanmodel <- cmdstanr::cmdstan_model("object_detection_for_tourism_03.stan")
+stanmodel <- cmdstanr::cmdstan_model("moving_speed_for_tourism_024.stan")
 # Model executable is up to date!
-fit <- 
+fit <-
   stanmodel$sample(
     data = data,     # 分析に用いるデータのリスト
     seed = 123,          # 乱数の種
@@ -358,9 +370,13 @@ fit <-
     iter_sampling = 500 # サンプリング
     )
 # save
-fit$save_object(file = "fit.rds")
+# fit$save_object(file = "fit.rds")
 # summary
-fit$summary()
+fit_results <- fit$summary()
+fit_results
 # save the results by .csv
-readr::write_excel_csv(fit$summary(), "fit.csv")
+readr::write_excel_csv(fit_results, "fit24.csv")
+
+
+
 
