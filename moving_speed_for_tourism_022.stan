@@ -70,3 +70,4 @@ generated quantities {
     estimated_speed[t] = normal_rng(x[t] + r_mode[obs_mode[t]] + r_occasion[obs_occasion[t]], s_v);  // Estimated speed for the full time range
   }
 }
+
