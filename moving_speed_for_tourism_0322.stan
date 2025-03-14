@@ -57,11 +57,11 @@ model {
     real lagged_effect = 0;
     for (k in 1:K_max) {
       if (n - k > 0) {  
-        lagged_effect += c[k] * log(fmax(Z_obs[max(1, n - k)], 1e-6));  
+        lagged_effect += c[k] * log10(fmax(Z_obs[max(1, n - k)], 1e-6));  
       }
     }
     speed_obs[n] ~ normal(
-      a + b * log(fmax(Z_obs[n], 1e-6)) + lagged_effect +  
+      a + b * log10(fmax(Z_obs[n], 1e-6)) + lagged_effect +  
       x[min(obs_time[n], T)] +  
       r_mode[obs_mode[n]] + 
       r_occasion[obs_occasion[n]],
@@ -76,23 +76,24 @@ generated quantities {
   array[N_obs] real estimated_speed;
   
   for (n in 1:N_obs) {
-    real lagged_effect = 0;
+    real lagged_effect;
+    // real lagged_effect = 0;
     for (k in 1:K_max) {
       if (n - k > 0) {
-        lagged_effect += c[k] * log(Z_obs[max(1, n - k)]);
+        lagged_effect += c[k] * log10(Z_obs[max(1, n - k)]);
       }
     }
     
     // Print debugging info to detect -inf values
-    print("n: ", n, 
-          " | log(Z_obs): ", log(Z_obs[n]),
-          " | lagged_effect: ", lagged_effect,
-          " | x: ", x[min(obs_time[n], T)],
-          " | r_mode: ", r_mode[obs_mode[n]],
-          " | r_occasion: ", r_occasion[obs_occasion[n]]);
+    // print("n: ", n, 
+    //       " | log10(Z_obs): ", log10(Z_obs[n]),
+    //       " | lagged_effect: ", lagged_effect,
+    //       " | x: ", x[min(obs_time[n], T)],
+    //       " | r_mode: ", r_mode[obs_mode[n]],
+    //       " | r_occasion: ", r_occasion[obs_occasion[n]]);
 
     log_lik[n] = normal_lpdf(speed_obs[n] | 
-      a + b * log(Z_obs[n]) + lagged_effect +  
+      a + b * log10(Z_obs[n]) + lagged_effect +  
       x[min(obs_time[n], T)] +  
       r_mode[obs_mode[n]] + 
       r_occasion[obs_occasion[n]],
@@ -100,7 +101,7 @@ generated quantities {
     );
 
     estimated_speed[n] = normal_rng(
-      a + b * log(Z_obs[n]) + lagged_effect +  
+      a + b * log10(Z_obs[n]) + lagged_effect +  
       x[min(obs_time[n], T)] +  
       r_mode[obs_mode[n]] + 
       r_occasion[obs_occasion[n]], 
