@@ -2,10 +2,7 @@
 # Diurnal variation of moving speed by wheelchair tourist
 # by Yuzuru Utsunomiya
 # First: 20th. February 2025
-# Revised: 4th. March 2025
-#
-#
-#
+# Revised: 16th. March 2025
 #########################################################################
 #
 # Note
@@ -19,9 +16,10 @@ library(tidyverse)
 library(khroma)
 library(gtsummary)
 library(cmdstanr)
-library(future)
+library(posterior)
 # magic word
 options(digits.secs = 5)
+plan(multisession, workers = 16)
 # 
 # ----- read.data -----
 # speed (km/sec) by GPS 
@@ -29,7 +27,7 @@ temples_feb_2025_speed <-
   readxl::read_excel(
     "temples_feb_2025.xlsx",
     sheet = "speed"
-    ) |> 
+  ) |> 
   dplyr::mutate(
     id_all = factor(id_all),
     id_track = factor(id_track),
@@ -52,8 +50,8 @@ temples_feb_2025_speed <-
       (track == "3" | track == "4") ~ "afternoon",
       (track == "5" | track == "6") ~ "evening",
       TRUE ~ "hoge"
-      )
-    ) |> 
+    )
+  ) |> 
   # complete missing observation
   # DO NOT BE CARELESS!! Even thought the data is collected by the GPS, 
   # the logging data includes missing values, which inhibit analyses normally.
@@ -61,7 +59,7 @@ temples_feb_2025_speed <-
     time = tidyr::full_seq(time, 1), mode, occasion, 
     # for the missing values, place NA
     fill = list(lat = NA, lon = NA, speed = NA)
-    ) |> 
+  ) |> 
   dplyr::mutate(
     # Compute differences between start time and a reference time
     difference = lubridate::time_length(
@@ -81,7 +79,7 @@ temples_feb_2025_speed <-
   dplyr::mutate(
     across(where(is.character), 
            factor)
-    ) |> 
+  ) |> 
   dplyr::select(-difference) %>% 
   ungroup() |>  
   # group_by(track) |> 
@@ -94,7 +92,7 @@ temples_feb_2025_speed <-
   # # convert the standard time in dttm format into one in hms format.
   dplyr::mutate(
     standard_time = hms::as_hms(standard_time)
-    )
+  )
 # detected objects from six movies
 # make a file list to read the target files
 file_list <- fs::dir_ls("temples_log", glob = "*.csv")
@@ -106,7 +104,7 @@ detected_objects <-
     id = 'filename',
     # select necessary variables
     col_select = c(timestamp_ms, class_name, confidence, frame_number)
-    ) |> 
+  ) |> 
   dplyr::mutate(
     # pick up mode names (walk / wheelchair) from target files' name
     # Explanation:
@@ -161,8 +159,8 @@ object_time_millisec <-
   dplyr::left_join(
     temples_feb_2025_speed_key, 
     by = join_by(mode, occasion
-                 )
-    ) |> 
+    )
+  ) |> 
   dplyr::mutate(
     time_millisec = format(
       lubridate::milliseconds(timestamp_ms) + time_start, 
@@ -180,7 +178,7 @@ object_time <-
   dplyr::left_join(
     object_time_millisec |>　select(time, class_name, time_millisec), 
     by = join_by(time)
-    ) |>
+  ) |>
   dplyr::select(id_all, mode, occasion, class_name, time, time_millisec, standard_time, lat, lon, speed) |> 
   # to confirm progress of here
   dplyr::arrange(id_all) |> 
@@ -202,7 +200,7 @@ object_time_second <-
     mode, occasion, class_name, 
     # to group by second
     time = lubridate::floor_date(time, unit = "1 second")
-    ) |>
+  ) |>
   dplyr::summarise(
     N = sum(counter),
     Mean_speed = mean(speed)
@@ -219,7 +217,7 @@ object_time_second <-
     time = tidyr::full_seq(time, 1), 
     class_name, 
     fill = list(N = NA, Mean_speed = NA, lat = NA, lon = NA)
-    ) |>
+  ) |>
   dplyr::mutate(
     difference = lubridate::time_length(
       lubridate::interval(
@@ -228,15 +226,15 @@ object_time_second <-
         # minimum utc = start time
         # utc refers to times GPS logged with locations and other information.
         min(time)
-        )
       )
-    ) |> 
+    )
+  ) |> 
   dplyr::mutate(
     # Compute the gap between utc and difference.
     # We use the standard time to compare speed with variety of backgrounds with each other.
     standard_time = (time - seconds(difference)) |> hms::as_hms(),
     occasion = factor(occasion, levels = c("morning","afternoon","evening"))
-    ) |> 
+  ) |> 
   ungroup()
 # save the results
 # well done
@@ -303,10 +301,11 @@ ggsave("line_speed.pdf", plot = line_speed, width = 240, height = 160, units = "
 # ----- state.space.method -----
 # read data
 object_time_second <- readr::read_rds("object_time_second.rds")
-
-
+# make a special dataset for stan computing
 object_time_second_stan <- 
   object_time_second |> 
+  # Here, as a representative object, we chose person.
+  # When some others might be chosen, they should be added.
   dplyr::filter(class_name == "person") |> 
   group_by(mode, occasion) |> 
   dplyr::mutate(
@@ -314,12 +313,15 @@ object_time_second_stan <-
   ) |> 
   ungroup() |> 
   dplyr::select(-time, -standard_time, -difference) |> 
+  # complete missing obsservations
   tidyr::complete(
     mode, occasion,
     standard_time_order,
     fill = list(lat = NA, lon = NA, Mean_speed = NA, N = NA)
-    ) |> 
+  ) |> 
+  # add ID number to the dataset
   {\(.) dplyr::mutate(., id=1:nrow(x=.))}() |> 
+  # replace name into number. The stan cannot understand any data other than numbers.
   dplyr::mutate(
     mode_id = dplyr::case_when(
       mode == "walk" ~ "1",
@@ -331,20 +333,29 @@ object_time_second_stan <-
       occasion == "afternoon" ~ "2",
       occasion == "evening" ~ "3",
       TRUE ~ "hoge"
-      )
     )
-
-# readr::write_excel_csv(object_time_second_stan, "data.csv")
-
+  )
+# split the variables for data list.
+# for stan, it is better to provide data as list.
+# total length of observations (4837)
 T <- length(levels(factor(object_time_second_stan$standard_time_order)))
+# N. of mode type (walk | wheelchair, 2)
 number_mode <- length(levels(factor(object_time_second_stan$mode))) 
+# N. of occasion type (morning | afternoon | evening, 3)
 number_occasion <- length(levels(factor(object_time_second_stan$occasion))) 
+# N. of observed observation in the dataset (N. of row, 18791)
 N_obs <- length(which(!is.na(object_time_second_stan$Mean_speed)))
+# (N. of row, 18791)
 obs_time <- object_time_second_stan |> drop_na(Mean_speed) |> select(standard_time_order) |> _$standard_time_order |> as.numeric(as.character())
+# (N. of row, 18791)
 obs_mode <- object_time_second_stan |> drop_na(Mean_speed) |> select(mode_id) |> _$mode_id |> as.numeric(as.character())
+# (N. of row, 18791)
 obs_occasion <- object_time_second_stan |> drop_na(Mean_speed) |> select(occasion_id) |> _$occasion_id |> as.numeric(as.character())
+# (N. of row, 18791)
 speed_obs <- purrr::discard(object_time_second_stan$Mean_speed, is.na)
-
+# (N. of row, 18791)
+Z_obs <- object_time_second_stan |> filter(!is.na(Mean_speed)) |> select(N) |>  _$N |> as.numeric(as.character())
+# make a data list
 data <- list(
   T = T,
   number_mode = number_mode,
@@ -353,30 +364,47 @@ data <- list(
   obs_time = obs_time,
   obs_mode = obs_mode,
   obs_occasion = obs_occasion,
-  speed_obs = speed_obs
+  speed_obs = speed_obs,
+  Z_obs = Z_obs,
+  K_max = 10  # Maximum number of lags
 )
+# computation
+# Here is a trial part to calibrate parameter and codes.
+# For confirmation, instead, we use purrr::map() to compute at a time.
 # Use CPU as many CPU cores as possible
 options(mc.cores = parallel::detectCores())
 # compile the model
-stanmodel <- cmdstanr::cmdstan_model("moving_speed_for_tourism_024.stan")
+stanmodel <- cmdstanr::cmdstan_model("moving_speed_for_tourism_model_01.stan")
 # Model executable is up to date!
 fit <-
   stanmodel$sample(
-    data = data,     # 分析に用いるデータのリスト
-    seed = 123,          # 乱数の種
-    chains = 4,          # チェイン数(規定値は4)
-    refresh = 100,      # コンソールに表示される結果の間隔
-    iter_warmup = 500,  # バーンイン期間
-    iter_sampling = 500 # サンプリング
-    )
+    data = data,     # data
+    seed = 123,          # random seed
+    chains = 4,          # N. of chains
+    refresh = 1000,      # span displaying computation results
+    iter_warmup = 10000,  # burn-in period
+    iter_sampling = 10000 # sampling period
+  )
 # save
-# fit$save_object(file = "fit.rds")
-# summary
-fit_results <- fit$summary()
-fit_results
-# save the results by .csv
-readr::write_excel_csv(fit_results, "fit24.csv")
+fit$save_object(file = "fit_moving_speed_for_tourism_model_01.rds")
 
-
-
+# ----- model.summary -----
+# Load your CmdStanR fit object to compute 95% credible intervals and other summary statistics
+fit_moving_speed_for_tourism_model_01 <- readr::read_rds("fit_moving_speed_for_tourism_model_01.rds")
+# fit_results_022 <- readr::read_rds("fit_results_022.rds")
+# 
+fit_moving_speed_for_tourism_model_01_summary <-
+  fit_moving_speed_for_tourism_model_01 |>
+  (\(.) .$draws())() |>  # Extract draws in a separate line
+  posterior::as_draws_df() |>
+  posterior::summarise_draws(
+    mean, sd, median, ~quantile(.x, probs = c(0.025, 0.975)), rhat, ess_bulk, ess_tail
+  ) 
+# save the summary table
+readr::write_excel_csv(
+  fit_moving_speed_for_tourism_model_01_summary, 
+  "fit_moving_speed_for_tourism_model_01_summary.csv"
+)
+# waic
+loo::loo(fit_moving_speed_for_tourism_model_01$draws())
 
