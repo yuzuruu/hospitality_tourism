@@ -19,7 +19,7 @@ library(cmdstanr)
 library(posterior)
 # magic word
 options(digits.secs = 5)
-plan(multisession, workers = 16)
+# plan(multisession, workers = 16)
 # 
 # ----- read.data -----
 # speed (km/sec) by GPS 
@@ -298,27 +298,139 @@ ggsave("line_n_object_by_occasion_classname.pdf", plot = line_n_object_by_occasi
 ggsave("line_speed.pdf", plot = line_speed, width = 240, height = 160, units = "mm")
 
 
-# ----- state.space.method -----
-# read data
-object_time_second <- readr::read_rds("object_time_second.rds")
-# make a special dataset for stan computing
-object_time_second_stan <- 
+# ----- state.space.method.with.persons.only -----
+# # read data
+# object_time_second <- readr::read_rds("object_time_second.rds")
+# # make a special dataset for stan computing
+# object_time_second_stan <- 
+#   object_time_second |> 
+#   # Here, as a representative object, we chose person.
+#   # When some others might be chosen, they should be added.
+#   dplyr::filter(class_name == "person") |> 
+#   group_by(mode, occasion) |> 
+#   dplyr::mutate(
+#     standard_time_order = order(standard_time)
+#   ) |> 
+#   ungroup() |> 
+#   dplyr::select(-time, -standard_time, -difference) |> 
+#   # complete missing obsservations
+#   tidyr::complete(
+#     mode, occasion,
+#     standard_time_order,
+#     fill = list(lat = NA, lon = NA, Mean_speed = NA, N = 0)
+#   ) |> 
+#   # add ID number to the dataset
+#   {\(.) dplyr::mutate(., id=1:nrow(x=.))}() |> 
+#   # replace name into number. The stan cannot understand any data other than numbers.
+#   dplyr::mutate(
+#     mode_id = dplyr::case_when(
+#       mode == "walk" ~ "1",
+#       mode == "wheelchair" ~ "2",
+#       TRUE ~ "hoge"
+#     ),
+#     occasion_id = dplyr::case_when(
+#       occasion == "morning" ~ "1",
+#       occasion == "afternoon" ~ "2",
+#       occasion == "evening" ~ "3",
+#       TRUE ~ "hoge"
+#     )
+#   )
+# # split the variables for data list.
+# # for stan, it is better to provide data as list.
+# # total length of observations (4837)
+# T <- length(levels(factor(object_time_second_stan$standard_time_order)))
+# # N. of mode type (walk | wheelchair, 2)
+# number_mode <- length(levels(factor(object_time_second_stan$mode))) 
+# # N. of occasion type (morning | afternoon | evening, 3)
+# number_occasion <- length(levels(factor(object_time_second_stan$occasion))) 
+# # N. of observed observation in the dataset (N. of row, 18791)
+# N_obs <- length(which(!is.na(object_time_second_stan$Mean_speed)))
+# # (N. of row, 18791)
+# obs_time <- object_time_second_stan |> drop_na(Mean_speed) |> select(standard_time_order) |> _$standard_time_order |> as.numeric(as.character())
+# # (N. of row, 18791)
+# obs_mode <- object_time_second_stan |> drop_na(Mean_speed) |> select(mode_id) |> _$mode_id |> as.numeric(as.character())
+# # (N. of row, 18791)
+# obs_occasion <- object_time_second_stan |> drop_na(Mean_speed) |> select(occasion_id) |> _$occasion_id |> as.numeric(as.character())
+# # (N. of row, 18791)
+# speed_obs <- purrr::discard(object_time_second_stan$Mean_speed, is.na)
+# # (N. of row, 18791)
+# N_barriers <- object_time_second_stan |> filter(!is.na(Mean_speed)) |> select(N) |>  _$N |> as.numeric(as.character())
+# # make a data list
+# data <- list(
+#   T = T,
+#   number_mode = number_mode,
+#   number_occasion = number_occasion,
+#   N_obs = N_obs,
+#   obs_time = obs_time,
+#   obs_mode = obs_mode,
+#   obs_occasion = obs_occasion,
+#   speed_obs = speed_obs,
+#   N_barriers = N_barriers,
+#   K_max = 10  # Maximum number of lags
+# )
+# # computation
+# # Here is a trial part to calibrate parameter and codes.
+# # For confirmation, instead, we use purrr::map() to compute at a time.
+# # Use CPU as many CPU cores as possible
+# options(mc.cores = parallel::detectCores())
+# # compile the model
+# stanmodel <- cmdstanr::cmdstan_model("moving_speed_for_tourism_model_02.stan")
+# # Model executable is up to date!
+# fit <-
+#   stanmodel$sample(
+#     data = data,     # data
+#     seed = 123,          # random seed
+#     chains = 4,          # N. of chains
+#     refresh = 500,      # span displaying computation results
+#     iter_warmup = 2000,  # burn-in period
+#     iter_sampling = 5000 # sampling period
+#   )
+# # save
+# fit$save_object(file = "fit_moving_speed_for_tourism_model_02.rds")
+
+# ----- state.space.method.with.all.barriers -----
+# make a different data to avoid confusion
+object_time_second <- 
+  readr::read_rds("object_time_second.rds")
+object_time_second_stan_temp <- 
   object_time_second |> 
-  # Here, as a representative object, we chose person.
-  # When some others might be chosen, they should be added.
-  dplyr::filter(class_name == "person") |> 
-  group_by(mode, occasion) |> 
+  group_by(mode, occasion, class_name) |>
   dplyr::mutate(
-    standard_time_order = order(standard_time)
-  ) |> 
-  ungroup() |> 
-  dplyr::select(-time, -standard_time, -difference) |> 
+    standard_time_order = order(standard_time) |> factor()
+  ) |>
+  ungroup() |>
+  dplyr::select(-time, -lat, -lon) |>
   # complete missing obsservations
   tidyr::complete(
-    mode, occasion,
+    mode, occasion, class_name,
     standard_time_order,
-    fill = list(lat = NA, lon = NA, Mean_speed = NA, N = NA)
-  ) |> 
+    fill = list(lat = NA, lon = NA, Mean_speed = NA, N = 0)
+  )
+# split the data by speed and N. of barriers
+# We cannot deal with data including the two variables at a time.
+# 1/2 for the N. of barriers
+df_n <- 
+  object_time_second_stan_temp %>%
+  select(mode, occasion, standard_time_order, class_name, N) %>%
+  pivot_wider(
+    names_from = class_name,
+    values_from = N,
+    names_prefix = "N_",
+    values_fill = 0
+  )
+# 2/2 for speed
+df_meta <- 
+  object_time_second_stan_temp %>%
+  group_by(mode, occasion, standard_time_order) %>%
+  summarise(
+    Mean_speed = mean(Mean_speed, na.rm = TRUE),
+    difference = first(difference),
+    standard_time = first(standard_time),
+    .groups = "drop"
+  )
+# join the two data above altogether
+object_time_second_stan <- 
+  left_join(df_meta, df_n, by = c("mode", "occasion", "standard_time_order")) |> 
   # add ID number to the dataset
   {\(.) dplyr::mutate(., id=1:nrow(x=.))}() |> 
   # replace name into number. The stan cannot understand any data other than numbers.
@@ -334,77 +446,220 @@ object_time_second_stan <-
       occasion == "evening" ~ "3",
       TRUE ~ "hoge"
     )
+  ) |> 
+  dplyr::mutate(across(where(is.character), factor))
+# save the data
+readr::write_excel_csv(object_time_second_stan, "object_time_second_stan_all.csv")
+# read the dataset
+object_time_second_stan_all <- 
+  read_csv("object_time_second_stan_all.csv") |> 
+  dplyr::mutate(across(where(is.character), factor))
+# make data for stan
+stan_data <- 
+  list(
+    T = length(levels(factor(object_time_second_stan$standard_time_order))),
+    # N. of mode type (walk | wheelchair, 2)
+    number_mode = length(levels(factor(object_time_second_stan$mode))), 
+    # N. of occasion type (morning | afternoon | evening, 3)
+    number_occasion = length(levels(factor(object_time_second_stan$occasion))), 
+    # N. of observed observation in the dataset (N. of row, 18791)
+    N_obs = length(which(!is.na(object_time_second_stan$Mean_speed))),
+    # (N. of row, 18791)
+    obs_time = object_time_second_stan |> drop_na(Mean_speed) |> dplyr::pull(standard_time_order) |> as.numeric(as.character()),
+    # (N. of row, 18791)
+    obs_mode = object_time_second_stan |> drop_na(Mean_speed) |> dplyr::pull(mode_id) |> as.numeric(as.character()),
+    # (N. of row, 18791)
+    obs_occasion = object_time_second_stan |> drop_na(Mean_speed) |> dplyr::pull(occasion_id) |>as.numeric(as.character()),
+    # (N. of row, 18791)
+    speed_obs = purrr::discard(object_time_second_stan$Mean_speed, is.na),
+    # (N. of row, 18791)
+    N_cars = object_time_second_stan |> filter(!is.na(Mean_speed)) |> dplyr::pull(N_car) |> as.numeric(as.character()),
+    N_motorcycles = object_time_second_stan |> filter(!is.na(Mean_speed)) |> dplyr::pull(N_motorcycle) |> as.numeric(as.character()),
+    N_persons = object_time_second_stan |> filter(!is.na(Mean_speed)) |> dplyr::pull(N_person) |> as.numeric(as.character())
   )
-# split the variables for data list.
-# for stan, it is better to provide data as list.
-# total length of observations (4837)
-T <- length(levels(factor(object_time_second_stan$standard_time_order)))
-# N. of mode type (walk | wheelchair, 2)
-number_mode <- length(levels(factor(object_time_second_stan$mode))) 
-# N. of occasion type (morning | afternoon | evening, 3)
-number_occasion <- length(levels(factor(object_time_second_stan$occasion))) 
-# N. of observed observation in the dataset (N. of row, 18791)
-N_obs <- length(which(!is.na(object_time_second_stan$Mean_speed)))
-# (N. of row, 18791)
-obs_time <- object_time_second_stan |> drop_na(Mean_speed) |> select(standard_time_order) |> _$standard_time_order |> as.numeric(as.character())
-# (N. of row, 18791)
-obs_mode <- object_time_second_stan |> drop_na(Mean_speed) |> select(mode_id) |> _$mode_id |> as.numeric(as.character())
-# (N. of row, 18791)
-obs_occasion <- object_time_second_stan |> drop_na(Mean_speed) |> select(occasion_id) |> _$occasion_id |> as.numeric(as.character())
-# (N. of row, 18791)
-speed_obs <- purrr::discard(object_time_second_stan$Mean_speed, is.na)
-# (N. of row, 18791)
-Z_obs <- object_time_second_stan |> filter(!is.na(Mean_speed)) |> select(N) |>  _$N |> as.numeric(as.character())
-# make a data list
-data <- list(
-  T = T,
-  number_mode = number_mode,
-  number_occasion = number_occasion,
-  N_obs = N_obs,
-  obs_time = obs_time,
-  obs_mode = obs_mode,
-  obs_occasion = obs_occasion,
-  speed_obs = speed_obs,
-  Z_obs = Z_obs,
-  K_max = 10  # Maximum number of lags
-)
-# computation
-# Here is a trial part to calibrate parameter and codes.
-# For confirmation, instead, we use purrr::map() to compute at a time.
-# Use CPU as many CPU cores as possible
-options(mc.cores = parallel::detectCores())
-# compile the model
-stanmodel <- cmdstanr::cmdstan_model("moving_speed_for_tourism_model_01.stan")
-# Model executable is up to date!
-fit <-
-  stanmodel$sample(
-    data = data,     # data
-    seed = 123,          # random seed
-    chains = 4,          # N. of chains
-    refresh = 1000,      # span displaying computation results
-    iter_warmup = 10000,  # burn-in period
-    iter_sampling = 10000 # sampling period
-  )
+# scale the data for stan
+# In terms of prior distribution use and MCMC process by stan, the stan prefer
+# scaled data.
+# ChatGPT noticed importance of scaling as follows:
+# Why scale variables before passing to Stan?
+# Stan uses Hamiltonian Monte Carlo (HMC) for sampling, and this algorithm is highly sensitive to the scale of parameters and predictors. 
+# Here’s why standardizing helps:
+# 1. Numerical stability & efficiency：Stan works best when all inputs (parameters, predictors, outcomes) are roughly on the same scale 
+# — ideally between -2 and 2. If one predictor ranges from 0 to 300 and another from 0 to 1, the sampler has to explore vastly different regions of 
+# parameter space at different scales, which slows convergence and can lead to poor mixing of chains high R-hat values divergent transitions
+# 2. Prior interpretation becomes easier: Once your predictors are standardized (mean = 0, sd = 1), the regression coefficients (beta) represent the 
+# change in outcome per 1 standard deviation increase in the predictor — which is often more interpretable and comparable across predictors.
+# 3. Default priors behave better: If you're using weakly informative priors like normal(0, 1) or normal(0, 2), they make much more sense if the 
+# predictor is scaled. If a predictor ranges from 0 to 500, normal(0, 1) becomes unrealistically tight.
+scale_vec <- function(x) as.vector(scale(x))
+stan_data$N_cars <- scale_vec(stan_data$N_car)
+stan_data$N_motorcycles <- scale_vec(stan_data$N_motorcycle)
+stan_data$N_persons <- scale_vec(stan_data$N_person)
+# Check the data list
+str(stan_data)
+# Compile the Stan model
+# Replace with your actual Stan model filename
+stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_01.stan")  
+# Run the Stan model
+fit <- 
+  stan_model$sample(
+    data = stan_data,
+    iter_sampling = 2000,
+    iter_warmup = 500,
+    chains = 4,
+    parallel_chains = 4,
+    adapt_delta = 0.9
+    )
 # save
-fit$save_object(file = "fit_moving_speed_for_tourism_model_01.rds")
-
+fit$save_object(file = "fit_moving_speed_for_tourism_model_03_01.rds")
+# 
 # ----- model.summary -----
 # Load your CmdStanR fit object to compute 95% credible intervals and other summary statistics
-fit_moving_speed_for_tourism_model_01 <- readr::read_rds("fit_moving_speed_for_tourism_model_01.rds")
+# WARNING
+# READING THE DATA SPENDS LOOOONG COMPUTATION PERIOD.
+# COMMENT OUT WHEN NOT IN USE
+# fit_moving_speed_for_tourism_model_01 <- readr::read_rds("fit_moving_speed_for_tourism_model_01.rds")
+# stable model
+# fit_moving_speed_for_tourism_model_02 <- readr::read_rds("fit_moving_speed_for_tourism_model_02.rds")
+# 
+fit_moving_speed_for_tourism_model_03_01 <- readr::read_rds("fit_moving_speed_for_tourism_model_03_01.rds")
 # fit_results_022 <- readr::read_rds("fit_results_022.rds")
 # 
-fit_moving_speed_for_tourism_model_01_summary <-
-  fit_moving_speed_for_tourism_model_01 |>
+# make summary table
+# model 1
+# fit_moving_speed_for_tourism_model_01_summary <-
+#   fit_moving_speed_for_tourism_model_01 |>
+#   (\(.) .$draws())() |>  # Extract draws in a separate line
+#   posterior::as_draws_df() |>
+#   posterior::summarise_draws(
+#     mean, sd, median, ~quantile(.x, probs = c(0.025, 0.975)), rhat, ess_bulk, ess_tail
+#   ) 
+# # model 2
+# fit_moving_speed_for_tourism_model_02_summary <-
+#   fit_moving_speed_for_tourism_model_02 |>
+#   (\(.) .$draws())() |>  # Extract draws in a separate line
+#   posterior::as_draws_df() |>
+#   posterior::summarise_draws(
+#     mean, sd, median, ~quantile(.x, probs = c(0.025, 0.975)), rhat, ess_bulk, ess_tail
+#   ) 
+# model 3
+fit_moving_speed_for_tourism_model_03_01_summary <-
+  fit_moving_speed_for_tourism_model_03_01 |>
   (\(.) .$draws())() |>  # Extract draws in a separate line
   posterior::as_draws_df() |>
   posterior::summarise_draws(
     mean, sd, median, ~quantile(.x, probs = c(0.025, 0.975)), rhat, ess_bulk, ess_tail
   ) 
-# save the summary table
+
+# # save the summary table
+# # model 1
+# readr::write_excel_csv(
+#   fit_moving_speed_for_tourism_model_01_summary, 
+#   "fit_moving_speed_for_tourism_model_01_summary.csv"
+# )
+# # model 2
+# readr::write_excel_csv(
+#   fit_moving_speed_for_tourism_model_02_summary, 
+#   "fit_moving_speed_for_tourism_model_02_summary.csv"
+# )
+# model 3
 readr::write_excel_csv(
-  fit_moving_speed_for_tourism_model_01_summary, 
-  "fit_moving_speed_for_tourism_model_01_summary.csv"
+  fit_moving_speed_for_tourism_model_03_01_summary, 
+  "fit_moving_speed_for_tourism_model_03_01_summary.csv"
 )
 # waic
 loo::loo(fit_moving_speed_for_tourism_model_01$draws())
-
+loo::loo(fit_moving_speed_for_tourism_model_02$draws())
+loo::loo(fit_moving_speed_for_tourism_model_03$draws())
+# 
+# ----- draw.state.space.results -----
+# x in model 2
+fit_model_02_obs_x <- 
+  fit_moving_speed_for_tourism_model_02_summary |> 
+  dplyr::mutate(variable = factor(variable)) |> 
+  dplyr::filter(stringr::str_detect(variable, "^x\\[")) |> 
+  dplyr::mutate(
+    standard_time_order = as.numeric(str_extract(variable, "(?<=\\[)\\d+(?=\\])"))
+  ) |> 
+  dplyr::select(-sd, -`2.5%`, -`97.5%`,-variable, -median, -rhat, -ess_bulk, -ess_tail) |> 
+  dplyr::mutate(
+    mode = "state",
+    occasion = "state"
+  ) |> 
+  dplyr::bind_cols(standard_time = observed_mean_speed |> dplyr::filter(mode == "walk" & occasion == "evening") |> select(standard_time)) |> 
+  data.table::setnames(c("Mean_speed","standard_time_order","mode","occasion","standard_time")) |> 
+  dplyr::bind_rows(observed_mean_speed)
+# beta in model 2
+fit_model_02_obs_beta <- 
+  fit_moving_speed_for_tourism_model_02_summary |> 
+  dplyr::mutate(variable = factor(variable)) |> 
+  # for model 3, we need to filter differences of beta
+  # (persons, cars, and motorcycles)
+  dplyr::filter(stringr::str_detect(variable, "^beta_")) |> 
+  dplyr::mutate(
+    # Description of the following regular expression
+    # (?<=\\[) preceded by left-hand-side square brank (\\[) 
+    # \\d+  any digit (0, 1, ..., 9)
+    # (?=\\])  followed by right-hand-side sqare brank (\\])
+    standard_time_order = as.numeric(str_extract(variable, "(?<=\\[)\\d+(?=\\])"))
+  ) |> 
+  dplyr::select(-median,-variable, -median, -rhat, -ess_bulk, -ess_tail, -standard_time_order) |> 
+  # pick up standard_time from the conditions with the longest standard_time 
+  dplyr::bind_cols(standard_time = observed_mean_speed |> dplyr::filter(mode == "walk" & occasion == "evening") |> select(standard_time)) |> 
+  data.table::setnames(c("beta","sd","LCI","UCI","standard_time")) |> 
+  # evaluate whether the beta_ includes zero in its 95%CI or not
+  dplyr::mutate(zero_between = as.integer(0 >= pmin(LCI, UCI) & 0 <= pmax(LCI, UCI)))
+# draw lines 
+# x
+line_fit_model_01_obs_x <- 
+  fit_model_01_obs_x |> 
+  ggplot2::ggplot(
+    aes(
+      x = standard_time,
+      y = Mean_speed,
+      color = occasion,
+      linetype = mode,
+      alpha = occasion  # Add alpha inside aes()
+    ) 
+  ) +
+  geom_line() + 
+  labs(
+    x = "Time (Unit: sec)",
+    y = "State of the moving speed over time (x)"
+  ) + 
+  scale_color_manual(
+    values = c(
+      afternoon = "#2997E6",
+      evening = "#61D04F",
+      morning = "#F5C710",
+      state = "black"
+    )
+  ) +
+  scale_alpha_manual(  # Now alpha is mapped correctly
+    values = c(
+      afternoon = 0.2,
+      evening = 0.2,
+      morning = 0.5,
+      state = 1.0
+    )
+  ) +
+  theme_classic() +
+  theme(
+    legend.position = "none"
+  )
+# beta
+line_fit_model_02_obs_beta <- 
+  fit_model_02_obs_beta |> 
+  ggplot2::ggplot(
+    aes(
+      x = standard_time,
+      y = beta
+    )
+  ) +
+  geom_line(color = "black") +  # Line remains black
+  geom_point(aes(color = "blue", alpha = factor(zero_between)), size = 3) +  # Adjust alpha
+  scale_alpha_manual(
+    values = c("0" = 1, "1" = 0)  # 1 = fully visible, 0 = fully transparent
+  ) +
+  guides(alpha = "none") +  # Remove alpha legend
+  theme_classic()
