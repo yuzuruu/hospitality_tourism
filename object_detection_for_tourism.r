@@ -399,7 +399,7 @@ object_time_second_stan_temp <-
     standard_time_order = order(standard_time) |> factor()
   ) |>
   ungroup() |>
-  dplyr::select(-time, -lat, -lon) |>
+  dplyr::select(-time) |>
   # complete missing obsservations
   tidyr::complete(
     mode, occasion, class_name,
@@ -425,6 +425,8 @@ df_meta <-
   summarise(
     Mean_speed = mean(Mean_speed, na.rm = TRUE),
     difference = first(difference),
+    lat = first(lat),
+    lon = first(lon),
     standard_time = first(standard_time),
     .groups = "drop"
   )
@@ -448,6 +450,7 @@ object_time_second_stan <-
     )
   ) |> 
   dplyr::mutate(across(where(is.character), factor))
+
 # save the data
 readr::write_excel_csv(object_time_second_stan, "object_time_second_stan_all.csv")
 # read the dataset
@@ -663,3 +666,56 @@ line_fit_model_02_obs_beta <-
   ) +
   guides(alpha = "none") +  # Remove alpha legend
   theme_classic()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+readr::write_excel_csv(object_time_second_stan, "object_time_second_stan.csv")
+
+library(sf)
+df <- data.frame(
+  id = 1:length(object_time_second_stan),
+  lat = object_time_second_stan$lat,
+  lon = object_time_second_stan$lon
+)
+# Assuming your dataframe is called df
+df_clean <- df %>%
+  filter(!is.na(lat), !is.na(lon))  # Keep only complete coordinate rows
+
+# Now convert to sf object
+points_sf <- st_as_sf(df_clean, coords = c("lon", "lat"), crs = 4326)
+
+# Project to local coordinates (Web Mercator: meters)
+points_proj <- st_transform(points_sf, crs = 3857)
+
+# Extract x, y
+coords <- st_coordinates(points_proj)
+df_clean$x <- coords[, 1]
+df_clean$y <- coords[, 2]
+
+
+stan_data <- 
+  list(
+    T = length(levels(factor(object_time_second_stan$standard_time_order))),
+    # N. of observed observation in the dataset (N. of row, 18791)
+    N_obs = length(which(!is.na(object_time_second_stan$Mean_speed))),
+    # (N. of row, 18791)
+    speed_obs = purrr::discard(object_time_second_stan$Mean_speed, is.na),
+  )
