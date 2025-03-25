@@ -157,13 +157,13 @@ str(stan_data)
 # done
 # stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial.stan")
 # 
-stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_latentstate.stan")
+# stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_latentstate.stan")
 # 
-stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_latentstate_overtime.stan")  
+# stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_latentstate_overtime.stan")  
 # 
-stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_interaction.stan")  
+# stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_interaction.stan")  
 # 
-stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_interaction_overtime.stan")  
+# stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_interaction_overtime.stan")  
 
 
 
@@ -171,8 +171,8 @@ stan_model <- cmdstan_model("moving_speed_for_tourism_model_03_spatial_interacti
 fit <- 
   stan_model$sample(
     data = stan_data,
-    iter_sampling = 1000,
-    iter_warmup = 500,
+    iter_sampling = 2000,
+    iter_warmup = 1000,
     chains = 4,
     parallel_chains = 4,
     adapt_delta = 0.9
@@ -180,16 +180,18 @@ fit <-
 # save
 fit$save_object(file = "fit_moving_speed_for_tourism_model_03_spatial_latentstate.rds")
 # 
-fit_moving_speed_for_tourism_model_03_spatial_latentstate <- readr::read_rds("fit_moving_speed_for_tourism_model_03_spatial_latentstate.rds")
+fit_moving_speed_for_tourism_model_03_spatial_latentstate <- 
+  readr::read_rds("fit_moving_speed_for_tourism_model_03_spatial_latentstate.rds")
 # make summary table
-# model 3 spatial
-fit_moving_speed_for_tourism_model_03_spatial_latentstate_summary <-
-  fit_moving_speed_for_tourism_model_03_spatial_latentstate |>
-  (\(.) .$draws())() |>  # Extract draws in a separate line
-  posterior::as_draws_df() |>
-  posterior::summarise_draws(
-    mean, sd, median, ~quantile(.x, probs = c(0.025, 0.975)), rhat, ess_bulk, ess_tail
-  )
+# Extract draws and convert to draws_df
+draws_df <- fit_moving_speed_for_tourism_model_03_spatial_latentstate$draws() |>
+  posterior::as_draws_df()
+# Summarize using correct syntax (functions passed unquoted)
+fit_moving_speed_for_tourism_model_03_spatial_latentstate_summary <- 
+  summarise_draws(
+    draws_df, mean, sd, median, ~ quantile(.x, probs = c(0.025, 0.975)), rhat, ess_bulk, ess_tail
+)
+
 # model 3 spatial
 readr::write_excel_csv(
   fit_moving_speed_for_tourism_model_03_spatial_latentstate_summary, 
