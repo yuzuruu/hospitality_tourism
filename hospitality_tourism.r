@@ -301,7 +301,9 @@ walk_wheelchair_analysis_model_01 <-
   readr::read_rds(
     "walk_wheelchair_analysis_model_01.rds"
   )
-# draw a line plot
+
+walk_wheelchair_analysis_model_01$data[[1]]
+# draw a line
 walk_wheelchair_analysis_model_01_line <- 
   walk_wheelchair_analysis_model_01 %>% 
   dplyr::mutate(
@@ -311,7 +313,7 @@ walk_wheelchair_analysis_model_01_line <-
         dplyr::filter(., stringr::str_detect(.$variable, "yhat"))%>%
         bind_cols(data) %>% 
         ggplot2::ggplot() +
-        geom_point(aes(x = standard_time, y = speed), color = "skyblue") +
+        geom_point(aes(x = standard_time, y = velocity), color = "skyblue") +
         geom_line(aes(x = standard_time, y = mean)) +
         geom_ribbon(aes(x = standard_time, ymin = q2.5, ymax = q97.5), alpha = 0.2) +
         labs(
@@ -359,3 +361,33 @@ walk_wheelchair_analysis_model_01_sd_line <-
 pdf("walk_wheelchair_analysis_model_01_line_sd.pdf")
 walk_wheelchair_analysis_model_01_sd_line$line_plot
 dev.off()
+
+
+
+# for model 02
+
+walk_wheelchair_analysis_02 <- 
+  walk_wheelchair_standard_time %>% 
+  group_by(mode, course, round) %>% 
+  nest() %>% 
+  dplyr::left_join(
+    standard_time_filter,
+    join_by(mode==mode, course==course, round==round)
+  ) %>% 
+  dplyr::mutate(
+    data = purrr::map(data, ~ dplyr::filter(., standard_time < last_time_standard))
+  ) %>% 
+  unnest() %>% 
+  ungroup() 
+
+# dplyr::filter(
+#   mode == "wheelchair" & course == "Peace_park" & round == "first"
+# ) 
+
+
+
+
+
+
+
+
