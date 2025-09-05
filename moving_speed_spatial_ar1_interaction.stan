@@ -1,3 +1,9 @@
+// accessible transportation
+// 5th. September 2025
+// by Yuzuru Utsunomiya, Ph.D.
+// (Faculty of Economics, Nagasaki University)
+
+// data
 data {
   int<lower=1> T;
   int<lower=1> N_obs;
@@ -30,6 +36,7 @@ data {
   int<lower=1> J_occasion;
 }
 
+// parameter
 parameters {
   vector[N_miss] speed_miss;
   vector[N_miss_lon] lon_miss;
@@ -55,6 +62,7 @@ parameters {
   vector[T] x_raw;
 }
 
+// transformed parameter
 transformed parameters {
   vector[T] speed;
   vector[T] lon;
@@ -84,6 +92,7 @@ transformed parameters {
     x[t] = phi1 * x[t - 1] + x_raw[t] * sigma_x;
 }
 
+// model
 model {
   a ~ normal(2, 1);
 
@@ -124,6 +133,7 @@ model {
   }
 }
 
+// generated quantities
 generated quantities {
   vector[N_obs] log_lik;
   for (n in 1:N_obs) {

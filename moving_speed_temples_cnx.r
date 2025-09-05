@@ -16,9 +16,12 @@ library(gtsummary)
 library(cmdstanr)
 library(posterior)
 library(sf)
+library(gt)
+library(knitr)
+library(kableExtra)
+# 
 # magic word
 options(digits.secs = 5)
-# plan(multisession, workers = 16)
 # 
 # ----- read.data -----
 # speed (km/sec) by GPS 
@@ -92,6 +95,8 @@ temples_feb_2025_speed <-
   dplyr::mutate(
     standard_time = hms::as_hms(standard_time)
   )
+# 
+# ----- detected.objects -----
 # detected objects from six movies
 # make a file list to read the target files
 file_list <- fs::dir_ls("temples_log", glob = "*.csv")
@@ -128,6 +133,8 @@ detected_objects <-
   dplyr::mutate(across(where(is.character), factor)) |> 
   # tibble!
   dplyr::tibble()
+# 
+# ----- combine.gps.objects -----
 # combine GPS logging data and detected objects lists
 # Procedure
 # 1. Make a table of started time (temples_feb_2025_speed_key). 
@@ -139,8 +146,6 @@ detected_objects <-
 # The timestamps in millisecond do not meet existing GPS loggind data in second.
 # By aggregating the millisecond variable by second, we can merge the two data
 # 3. Complete missing values
-# 4. 
-# 5. 
 # 
 # 1. make a key table
 temples_feb_2025_speed_key <- 
@@ -238,10 +243,12 @@ object_time_second <-
 # save the results
 # well done
 readr::write_rds(object_time_second, "object_time_second.rds")
-
-# ----- figure.and.table -----
+# 
+# ----- table.1 -----
+# (Table 1)
 # read data
-object_time_second <- readr::read_rds("object_time_second.rds")
+object_time_second <- readr::read_csv("object_time_second.csv")
+
 # table 1
 object_time_tableone <- 
   object_time_second |> 
@@ -254,93 +261,11 @@ object_time_tableone <-
         statistic = list(all_continuous() ~ "{mean} ({sd})")
       )
   ) 
-# line plot of speed over time
-# N. of detected items over time
-line_n_object_by_occasion_classname <- 
-  object_time_second |> 
-  ggplot(aes(x=standard_time, y = log(N+0.5), color = class_name)) + 
-  geom_line() + 
-  labs(
-    x = "Elapsed time (Unit:Sec.)",
-    y = "N. of detected itmes (log Trans.)",
-    color = "Objects"
-  ) + 
-  scale_color_light(reverse = FALSE) +
-  scale_x_time(labels = \(x) format(as_datetime(x, tz = "UTC"), "%H:%M")) +
-  facet_wrap(~ occasion + mode, scale = "free", dir = "v", ncol = 3) +
-  theme_classic() +
-  theme(
-    legend.position = "bottom",
-    strip.background = element_blank()
-  )
-# speed
-line_speed <- 
-  temples_feb_2025_speed |> 
-  dplyr::mutate(occasion = factor(occasion, levels = c("morning","afternoon","evening"))) |> 
-  ggplot(aes(x = standard_time, y = speed, color = mode)) + 
-  geom_line() + 
-  labs(
-    x = "Elapsed time (Unit: km/s)",
-    y = "Speed (Unit: km/h)",
-    color = "Mode"
-  ) + 
-  scale_color_okabeito(reverse = FALSE) +
-  scale_x_time(labels = \(x) format(as_datetime(x, tz = "UTC"), "%H:%M")) +
-  facet_wrap(~ occasion + mode, scale = "free", dir = "v", ncol = 3) +
-  theme_classic() +
-  theme(
-    legend.position = "bottom",
-    strip.background = element_blank()
-  )
-# save
-ggsave("line_n_object_by_occasion_classname.pdf", plot = line_n_object_by_occasion_classname, width = 240, height = 160, units = "mm")
-ggsave("line_speed.pdf", plot = line_speed, width = 240, height = 160, units = "mm")
-
-
-# ----- refine.data -----
-# # read data
-# object_time_second <- readr::read_rds("object_time_second.rds")
-# # make a special dataset for stan computing
-# object_time_second_stan <- 
-#   object_time_second |> 
-#   # Here, as a representative object, we chose person.
-#   # When some others might be chosen, they should be added.
-#   dplyr::filter(class_name == "person") |> 
-#   group_by(mode, occasion) |> 
-#   dplyr::mutate(
-#     standard_time_order = order(standard_time)
-#   ) |> 
-#   ungroup() |> 
-#   dplyr::select(-time, -standard_time, -difference) |> 
-#   # complete missing obsservations
-#   tidyr::complete(
-#     mode, occasion,
-#     standard_time_order,
-#     fill = list(lat = NA, lon = NA, Mean_speed = NA, N = 0)
-#   ) |> 
-#   # add ID number to the dataset
-#   {\(.) dplyr::mutate(., id=1:nrow(x=.))}() |> 
-#   # replace name into number. The stan cannot understand any data other than numbers.
-#   dplyr::mutate(
-#     mode_id = dplyr::case_when(
-#       mode == "walk" ~ "1",
-#       mode == "wheelchair" ~ "2",
-#       TRUE ~ "hoge"
-#     ),
-#     occasion_id = dplyr::case_when(
-#       occasion == "morning" ~ "1",
-#       occasion == "afternoon" ~ "2",
-#       occasion == "evening" ~ "3",
-#       TRUE ~ "hoge"
-#     )
-#   )
-# readr::write_excel_csv(object_time_second_stan, "object_time_second_stan.csv")
-# 
 # 
 # ----- make.data.for.stan -----
 # STEP 1: Load the raw data
-
-df <- readr::read_csv(
+df <- 
+  readr::read_csv(
   "object_time_second_stan.csv"
   )
 df$id <- seq_len(nrow(df))  # assign unique ID for merging
@@ -359,8 +284,10 @@ points_sf <-
     crs = 4326
     )
 # convert crs
-points_proj <- sf::st_transform(points_sf, crs = 3857)
-coords <- sf::st_coordinates(points_proj)
+points_proj <- 
+  sf::st_transform(points_sf, crs = 3857)
+coords <- 
+  sf::st_coordinates(points_proj)
 # Add x/y back to coordinate-ready rows
 df_with_coords$x <- coords[, 1]
 df_with_coords$y <- coords[, 2]
@@ -368,11 +295,11 @@ df_with_coords$y <- coords[, 2]
 df_full <- 
   df %>%
   dplyr::left_join(
-    df_with_coords  |>  select(id, x, y), 
+    df_with_coords  |>  dplyr::select(id, x, y), 
     by = "id"
     )
-# Standardize predictors (even with NAs)
-# function
+# Scale predictors (even with NAs)
+# scaling function
 scale_column <- 
   function(x){
     m <- mean(x, na.rm = TRUE)
@@ -388,6 +315,7 @@ df_full <- df_full %>%
     N_person_std = scale_column(N_person),
     N_motorcycle_std = scale_column(N_motorcycle)
   )
+readr::write_excel_csv(df_full, "df_full.csv")
 # Identify observed and missing speed rows
 obs_idx_speed <- which(!is.na(df_full$Mean_speed))
 miss_idx_speed <- which(is.na(df_full$Mean_speed))
@@ -509,4 +437,4 @@ readr::write_excel_csv(
 loo_ar1_interaction <- 
   loo::loo(fit_moving_speed_spatial_ar1_interaction$draws())
 
-# END
+
